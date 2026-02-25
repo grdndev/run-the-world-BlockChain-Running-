@@ -1,0 +1,341 @@
+// Run The World - Database Schema
+// PostgreSQL + Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum Grade {
+  STARTER
+  DEBUTANT
+  CONFIRME
+  EXPERT
+  PRO
+  ELITE
+}
+
+enum LandStatus {
+  LIBRE
+  LOUEE
+  ACHETEE
+}
+
+enum TransactionType {
+  SIGNUP_BONUS
+  LEAGUE_REWARD
+  LAND_RENT
+  LAND_PURCHASE
+  LAND_REVENUE_ACTIVE
+  LAND_REVENUE_PASSIVE
+  BOOST_PURCHASE
+  DAILY_LOGIN
+  TREASURE
+  TRANSFER
+  RUN_REWARD
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // 2FA
+  twoFactorSecret String?
+  twoFactorEnabled Boolean  @default(false)
+
+  // KYC
+  kycVerified     Boolean   @default(false)
+  kycVerifiedAt   DateTime?
+
+  playerCard      PlayerCard?
+
+  @@map("users")
+}
+
+model PlayerCard {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  username        String    @unique
+  nationality     String    @default("FRANCE")
+  grade           Grade     @default(STARTER)
+
+  // Wallet
+  rpcBalance      Int       @default(5000) // signup bonus
+  oziBalance      Float     @default(0)
+
+  // Stats
+  totalPts        Int       @default(0)
+  totalKm         Float     @default(0)
+  currentPeriodPts Int      @default(0)
+
+  // League
+  leagueNumber    Int       @default(0) // 0 = STARTER, 1-10
+  leagueRank      Int       @default(0)
+
+  // ID system
+  idValidUntil    DateTime
+  idActive        Boolean   @default(true)
+
+  // Periods
+  periodsCompleted Int      @default(0)
+  currentPeriodStart DateTime @default(now())
+
+  // Blockchain (prepared for EOS)
+  eosAccountName  String?
+  eosPublicKey    String?
+
+  // Boost
+  boostsUsedThisPeriod Int  @default(0)
+  freeBoostUsed   Boolean   @default(false)
+
+  // Daily login
+  consecutiveLoginDays Int  @default(0)
+  lastLoginDate   DateTime?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // Relations
+  runs            Run[]
+  landLeases      LandLease[]
+  landOwnerships  LandOwnership[]
+  landExplorations LandExploration[]
+  transactions    Transaction[]
+  teamMembership  TeamMember?
+  boosts          Boost[]
+
+  @@map("player_cards")
+}
+
+model Run {
+  id              String    @id @default(cuid())
+  playerCardId    String
+  playerCard      PlayerCard @relation(fields: [playerCardId], references: [id], onDelete: Cascade)
+
+  // GPS start position
+  startLat        Float     @default(0)
+  startLng        Float     @default(0)
+
+  // Timing
+  startTime       DateTime  @default(now())
+  endTime         DateTime?
+
+  // Stats
+  distanceKm      Float     @default(0)
+  durationMinutes Int       @default(0)
+  avgSpeedKmh     Float     @default(0)
+
+  // Points & rewards
+  ptsEarned       Int       @default(0)
+  rpcEarned       Int       @default(0)
+  landsTraversed  Int       @default(0)
+
+  // GPS trace (stored as JSON array of {lat, lng, t})
+  gpsTrace        String?   @db.Text
+
+  // Anti-cheat
+  antiCheatFlag   Boolean   @default(false)
+  antiCheatReason String?
+
+  createdAt       DateTime  @default(now())
+
+  @@map("runs")
+}
+
+model Land {
+  id              String    @id @default(cuid())
+
+  // H3 hex index for geospatial mapping
+  h3Index         String    @unique
+  lat             Float
+  lng             Float
+
+  // Location info
+  city            String?
+  region          String?
+  country         String?
+
+  // Status
+  status          LandStatus @default(LIBRE)
+
+  // Value
+  baseValueRpc    Int       @default(5000)
+  baseValueOzi    Float     @default(80000)
+
+  // Relations
+  currentLease    LandLease?
+  currentOwnership LandOwnership?
+  explorations    LandExploration[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("lands")
+}
+
+model LandLease {
+  id              String    @id @default(cuid())
+  landId          String    @unique
+  land            Land      @relation(fields: [landId], references: [id])
+  playerCardId    String
+  player          PlayerCard @relation(fields: [playerCardId], references: [id])
+
+  monthlyRentRpc  Int       @default(5000)
+  startDate       DateTime  @default(now())
+  active          Boolean   @default(true)
+  periodsHeld     Int       @default(1)
+
+  // Revenue tracking
+  totalActiveRevenue  Int   @default(0)
+  totalPassiveRevenue Int   @default(0)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("land_leases")
+}
+
+model LandOwnership {
+  id              String    @id @default(cuid())
+  landId          String    @unique
+  land            Land      @relation(fields: [landId], references: [id])
+  playerCardId    String
+  player          PlayerCard @relation(fields: [playerCardId], references: [id])
+
+  purchasePriceOzi Float
+  purchasedAt     DateTime  @default(now())
+  periodsOwned    Int       @default(0)
+
+  // Revenue tracking
+  totalRevenueRpc Int       @default(0)
+  totalRevenueOzi Float     @default(0)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("land_ownerships")
+}
+
+model LandExploration {
+  id              String    @id @default(cuid())
+  landId          String
+  land            Land      @relation(fields: [landId], references: [id])
+  playerCardId    String
+  player          PlayerCard @relation(fields: [playerCardId], references: [id])
+
+  visitCount      Int       @default(1)
+  lastVisitedAt   DateTime  @default(now())
+
+  @@unique([landId, playerCardId])
+  @@map("land_explorations")
+}
+
+model Transaction {
+  id              String          @id @default(cuid())
+  playerCardId    String
+  playerCard      PlayerCard      @relation(fields: [playerCardId], references: [id])
+
+  type            TransactionType
+  amountRpc       Int             @default(0)
+  amountOzi       Float           @default(0)
+  description     String?
+  metadata        String?         @db.Text // JSON
+
+  createdAt       DateTime        @default(now())
+
+  @@map("transactions")
+}
+
+model League {
+  id              String    @id @default(cuid())
+  number          Int       @unique // 1-10
+  name            String
+  minPts          Int
+  maxPts          Int
+  buyInRpc        Int       @default(0)
+
+  // Period prize pool
+  currentPrizePool Int      @default(0)
+  participantCount Int      @default(0)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("leagues")
+}
+
+model Team {
+  id              String    @id @default(cuid())
+  name            String    @unique
+  createdById     String
+
+  totalPts        Int       @default(0)
+  leagueRank      Int       @default(0)
+
+  members         TeamMember[]
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id              String    @id @default(cuid())
+  teamId          String
+  team            Team      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  playerCardId    String    @unique
+  playerCard      PlayerCard @relation(fields: [playerCardId], references: [id])
+
+  role            String    @default("MEMBER") // LEADER, MEMBER
+  joinedAt        DateTime  @default(now())
+
+  @@map("team_members")
+}
+
+model Boost {
+  id              String    @id @default(cuid())
+  playerCardId    String
+  playerCard      PlayerCard @relation(fields: [playerCardId], references: [id])
+
+  type            String    // FREE or PAID
+  multiplier      Float     @default(1.5)
+  durationMinutes Int       @default(15)
+  expiresAt       DateTime
+  active          Boolean   @default(true)
+  activatedAt     DateTime  @default(now())
+
+  @@map("boosts")
+}
+
+model Period {
+  id              String    @id @default(cuid())
+  number          Int       @unique
+  startDate       DateTime
+  endDate         DateTime
+  isActive        Boolean   @default(false)
+
+  // OZI creation
+  oziCreatedPerDay Int      @default(80000)
+  totalOziCreated  Float    @default(0)
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("periods")
+}
+
